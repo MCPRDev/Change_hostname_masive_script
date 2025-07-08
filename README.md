@@ -122,6 +122,7 @@ El JSON base (`estructura.json`) debe tener este formato:
 
    - **Windows Powershell**: `.\Automatic_hostname_changer.exe Usuario Password`
    - **Modo desarrollo**: `python Automatic_hostname_changer.py Usuario Password`
+   - **Produccion**: `python Automatic_hostname_changer.exe (User and Password compilados en el .exe)`
 
 ---
 
