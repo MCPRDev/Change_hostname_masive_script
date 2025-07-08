@@ -163,10 +163,3 @@ El JSON base (`estructura.json`) debe tener este formato:
 4. Abrir *Pull Request*.
 
 ---
-
-## 📄 7. Licencia
-
-Licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más detalles.
-
----
-
