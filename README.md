@@ -170,5 +170,3 @@ Licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más detalles.
 
 ---
 
-*Documentación generada por ChatGPT, adaptada a tu flujo de trabajo.*
-
