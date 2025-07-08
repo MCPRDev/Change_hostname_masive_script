@@ -1,0 +1,24 @@
+{
+    "Hostname_existentes": {
+        "Lugar": {
+            "Puesto": {
+                "Tipo_Dispositivo_1": [],
+                "Tipo_Dispositivo_2": []
+            }
+        },
+        "Lugar2": {
+            "Puesto": {
+                "Tipo_Dispositivo_1": [],
+                "Tipo_Dispositivo_2": []
+            },
+            "Puesto2": {
+                "Tipo_Dispositivo_1": [],
+                "Tipo_Dispositivo_2": []
+            },
+            "Puesto3" : {
+                "Tipo_Dispositivo_1": [],
+                "Tipo_Dispositivo_2": []
+            }
+        }
+    }
+}
