@@ -62,31 +62,36 @@ El JSON base (`estructura.json`) debe tener este formato:
 
 1. **Chequeo de permisos**: Verifica que el usuario ejecute con privilegios de administrador local. Si no, sale con código **7**.
 2. **Obtención del hostname actual**: Si no lo obtiene, sale con código **8**.
-3. **Configuración de logging**:
+3. **Desincronizacion inicial**: Realiza una desincronizacion cuando se envian en masa por el EC para evitar conflictos con conectar a la carpeta compartida y no utilicen en .json la mismo tiempo
+4. **Configuración de logging**:
    - Llamada a `setup_shared_logging()`: crea carpeta de logs en local (`C:\...`) y en la carpeta compartida (subcarpeta configurable).
    - Registra cada paso con fecha, hora y hostname involucrado.
-4. **Carga del JSON**:
+5. **Carga del JSON**:
    - Intenta leer `hostnames.json` desde la carpeta compartida.
    - Si falla, intenta `C:\hostnames_backup.json`.
    - Si ambos fallan, parte con una estructura vacía.
-5. **Validación de dominio**: Si el equipo no está unido al dominio, sale con código **3**.
-6. **Verificación de hostname**:
+6. **Validación de dominio**: Si el equipo no está unido al dominio, sale con código **3**.
+7. **Verificación de hostname**:
    - Usa `verificar_hostname_correcto()`. Si cumple el patrón, sale con código **9**.
-7. **Extracción de componentes**: Lugar, Puesto y número de dispositivo. Si falla, sale con código **4**.
-8. **Búsqueda de número libre**:
+8. **Extracción de componentes**: Lugar, Puesto y número de dispositivo. Si falla, sale con código **4**.
+9. **Búsqueda de número libre**:
    - En el JSON, busca los números ocupados para ese Lugar>Puesto>Tipo.
    - Asigna el menor número disponible (p.ej., si están 1,2,4, asigna 3). Si no hay hueco, asigna siguiente secuencial.
    - Si no hay categoría o no hay números, sale con código **5**.
-9. **Validación LDAP**:
+10. **Validación LDAP**:
    - Usa `validar_credenciales_ad()` y `verificar_hostname_en_ad()`.
-   - Si el nombre propuesto ya existe, sale con código **10** o **12**.
-10. **Cambio de nombre**:
+   - En caso de estar ocupad el hostname propuesto, busca otro numero disponible dentro del numero de intentos, en caso de hacer los intentos y no encontrar uno disponible retorna codigo **6**
+   - Si el nombre propuesto ya existe, sale con código **10** o **12** en caso de superar los intentos.
+11. **Reserva el hostname**: 
+- Reserva el hostname que valido para evitar que otros pc lo usen cuando esten ejecutando el ejecutable.
+- En caso de fallar, elimina el hostname reservado del .json
+12. **Cambio de nombre**:
     - Ejecuta `Rename-Computer` vía PowerShell.
-    - Espera 30 segundos y vuelve a confirmar en AD.
-11. **Actualización del JSON**:
-    - Agrega el nuevo hostname al array correspondiente.
+    - Espera 360 segundos y vuelve a confirmar en AD.
+13. **Actualización del JSON**:
+    - Agrega el nuevo hostname al array correspondiente de forma permanante.
     - Guarda de nuevo `hostnames.json` en la carpeta compartida.
-12. **Salida**:
+14. **Salida**:
     - Retorna `0` en caso de éxito.
 
 ---
