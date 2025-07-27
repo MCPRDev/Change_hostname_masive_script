@@ -180,15 +180,23 @@ def extraer_componentes_hostname(hostname, logger):
     - Número: 2 dígitos al final (antes del tipo de dispositivo)
     """
     # Intento 1: Usar expresión regular mejorada
-    match = re.match(r"^([A-Za-z0-9]{3})([A-Za-z0-9]{3,6})(\d{2})", hostname)
+    match = re.match(r"^([A-Za-z]{3})([A-Za-z]{2,6})(\d{1,3})", hostname)
     if match:
         lugar = match.group(1).upper()
         puesto = match.group(2).upper()
         numero = match.group(3)
         logger.info(f"Componentes extraídos (regex): Lugar={lugar}, Puesto={puesto}, Número={numero}")
         return lugar, puesto, numero
+    # Intento 2: Si no hay número, asignar '00'
+    match = re.match(r"^([A-Za-z]{3})([A-Za-z]{2,6})", hostname)
+    if match:
+        lugar = match.group(1).upper()
+        puesto = match.group(2).upper()
+        numero = '00'
+        logger.info(f"Componentes extraídos (sin número - regex): Lugar={lugar}, Puesto={puesto}, Número={numero}")
+        return lugar, puesto, numero
     
-    # Intento 2: Búsqueda adaptativa si falla el regex
+    # Intento 3: Búsqueda adaptativa si falla el regex
     lugar = None
     puesto = None
     numero = None
@@ -266,11 +274,15 @@ def verificar_hostname_correcto(hostname_actual, hostnames_data, tipo, logger):
         logger.error(f"Error verificando hostname: {str(e)}")
         return False
 
-def encontrar_numero_disponible(lugar, puesto, tipo, hostnames_data, logger):
+def encontrar_numero_disponible(lugar, puesto, tipo, hostnames_data, logger, numeros_ocupados_extra=None):
     """
-    Encuentra el primer número disponible SOLO para el tipo específico (PC/LP)
+    Encuentra el primer número disponible SOLO para el tipo específico (PC/LP),
+    considerando números adicionales ocupados.
     """
     try:
+        # Inicializar conjunto de números ocupados
+        numeros_ocupados = set()
+        
         # Verificar existencia de lugar y puesto
         lugares = hostnames_data.get("Hostname_existentes", {})
         if lugar not in lugares:
@@ -283,7 +295,6 @@ def encontrar_numero_disponible(lugar, puesto, tipo, hostnames_data, logger):
             return None
         
         # Obtener números ocupados SOLO para el tipo específico
-        numeros_ocupados = set()
         categorias = puestos[puesto]
         
         # Solo considerar la categoría específica (PC o LP)
@@ -293,15 +304,19 @@ def encontrar_numero_disponible(lugar, puesto, tipo, hostnames_data, logger):
                 if host.startswith(lugar + puesto):
                     # Extraer número (2 dígitos después de lugar+puesto)
                     resto = host[len(lugar) + len(puesto):]
-                    match = re.match(r"(\d{2})", resto)
+                    match = re.match(r"(\d{2,3})", resto)
                     if match:
                         try:
                             numeros_ocupados.add(int(match.group(1)))
                         except ValueError:
                             continue
         
-        # Buscar número disponible (1-99)
-        for num in range(1, 100):
+        # Agregar números ocupados adicionales
+        if numeros_ocupados_extra:
+            numeros_ocupados.update(numeros_ocupados_extra)
+        
+        # Buscar número disponible (1-999)
+        for num in range(1, 1000):
             if num not in numeros_ocupados:
                 return f"{num:02d}"
         
@@ -363,6 +378,44 @@ def verificar_hostname_en_ad(hostname, username, password, domain_controller, lo
         logger.error(f"Error verificando hostname en AD: {str(e)}")
         return False
 
+def obtener_hostname_nuevo_actual():
+    """Obtiene el hostname actual considerando registro y API"""
+    try:
+        # 1. Intentar obtener del registro (nuevo nombre configurado)
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 
+                          r"SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName") as key:
+            nuevo_hostname = winreg.QueryValueEx(key, "ComputerName")[0].upper()
+        
+        # 2. Verificar si el cambio ya está activo
+        hostname_api = socket.gethostname().upper()
+        
+        # Si coinciden, el cambio está activo
+        if hostname_api == nuevo_hostname:
+            return hostname_api
+        
+        # Si no coinciden, el cambio está pendiente de reinicio
+        return nuevo_hostname
+        
+    except Exception:
+        # Fallback a API si hay error con el registro
+        return socket.gethostname().upper()
+
+def verificar_hostname_en_ad_con_reintentos(hostname, username, password, domain_controller, logger, max_intentos=3):
+    tiempos_espera = [360, 600]
+    for i in range(max_intentos):
+        if not verificar_hostname_en_ad(hostname, username, password, domain_controller, logger):
+            logger.info(f"Hostname existe en AD (intento {i+1}/{max_intentos})")
+            return True
+        
+        if i < max_intentos - 1:
+            espera = tiempos_espera[i]
+            logger.warning(f"Hostname no encontrado. Reintentando en {espera // 60} minutos...")
+            time.sleep(espera)
+    
+    logger.error(f"Hostname no encontrado después de {max_intentos} intentos")
+    return False
+
 # Función cambiar_hostname corregida con tiempo de espera aumentado
 def cambiar_hostname(nuevo_hostname, domain_user, domain_password, logger):
     try:
@@ -387,15 +440,17 @@ def cambiar_hostname(nuevo_hostname, domain_user, domain_password, logger):
         
         if resultado.returncode == 0:
             logger.info(f"Comando rename ejecutado exitosamente para {nuevo_hostname}")
+            tiempo_base = 360
             
             # Aumentar tiempo de espera para propagación en AD
             logger.info("Esperando 360 segundos para propagación en AD...")
-            time.sleep(360)
+            time.sleep(tiempo_base)
             
             # Verificar en AD después del cambio
-            if not verificar_hostname_en_ad(nuevo_hostname, domain_user, domain_password, CONFIG["DOMINIO_CORPORATIVO"] ,logger):
+            if verificar_hostname_en_ad_con_reintentos(nuevo_hostname, domain_user, domain_password, CONFIG["DOMINIO_CORPORATIVO"], logger):
                 return True
-            logger.error("El cambio no se reflejó en Active Directory")
+            
+            logger.error(f"El ultimo intento de cambio de hostname {nuevo_hostname} falló en AD, no se reporto el cambio. Intentando nuevamente el cambio...")
             return False
         else:
             logger.error(f"Error en PowerShell: {resultado.stderr.strip()}")
@@ -552,7 +607,7 @@ def main():
         logger.error(f"FALLO CRÍTICO: Error al conectar a carpeta compartida: {str(e)}")
         return EXIT_SHARED_FOLDER_FAIL
 
-    maximo_intentos = 10
+    maximo_intentos = 3
     intentos = 1
     success_process = False
 
@@ -603,57 +658,88 @@ def main():
                     return EXIT_HOSTNAME_COMPONENTS_FAIL
                 
                 # Paso 8: Cambiar hostname
-                usuario = 'user_ad' # Aqui ingresas el usuario de AD (con los permisos necesarios)
-                password = 'Password_ad' # Aqui la contraseña de AD (con los permisos necesarios)
+                usuario = 'user_ad'
+                password = 'Password_ad'
                 
                 # 8.1: Primero validar credenciales
                 if not validar_credenciales_ad(usuario, password, 'ni',logger):
                     return EXIT_INVALID_CREDENTIALS
                 
             # Paso 9: Buscar número disponible
-            nuevo_numero = encontrar_numero_disponible(lugar, puesto, tipo, hostnames_data, logger)
-            if not nuevo_numero:
-                logger.error("FALLO CRÍTICO: No se encontró número disponible. Abortando.")
-                return EXIT_NO_AVAILABLE_NUMBER
+            numeros_ocupados_ad = set()
+            nuevo_hostname = None
+
+            for try_new_number in range(3):
+                #Recargar Hostname en cada busqueda
+                hostnames_data = cargar_json_hostnames(logger)
+                logger.info(f"Seleccionando numero hostname del nuevo hostname, cargando hostname en intento {try_new_number+1} de 3...")
+
+
+                nuevo_numero = encontrar_numero_disponible(lugar, puesto, tipo, hostnames_data, logger, numeros_ocupados_ad)
+                if not nuevo_numero:
+                    logger.error("FALLO CRÍTICO: No se encontró número disponible. Abortando.")
+                    return EXIT_NO_AVAILABLE_NUMBER
             
-            # Paso 10: Construir nuevo hostname
-            nuevo_hostname = f"{lugar}{puesto}{nuevo_numero}{tipo}"
-            logger.info(f"Nuevo hostname propuesto: {nuevo_hostname}")
+                # Paso 10: Construir nuevo hostname
+                nuevo_hostname = f"{lugar}{puesto}{nuevo_numero}{tipo}"
+                logger.info(f"Nuevo hostname propuesto en intento {try_new_number+1}: {nuevo_hostname}")
                 
-            # 2. Verificar disponibilidad en AD
-            if not verificar_hostname_en_ad(nuevo_hostname, usuario, password, CONFIG["DOMINIO_CORPORATIVO"], logger):
-                tiempo_base_espera = 3 + (intentos * 0.8)
-                tiempo_aleatorio = random.uniform(0, 8)
-                tiempo_espera = tiempo_base_espera + tiempo_aleatorio
-                logger.error(f"El hostname {nuevo_hostname} ya existe en AD. Esperando {tiempo_espera:.2f} segundos antes de reintentar...")
-                time.sleep(tiempo_espera)
-                intentos += 1
-                continue
+                # 2. Verificar disponibilidad en AD
+                if verificar_hostname_en_ad(nuevo_hostname, usuario, password, CONFIG["DOMINIO_CORPORATIVO"], logger):
+                    break  # Si el hostname no existe en AD, break del bucle
+
+                logger.warning(f"Hostname {nuevo_hostname} ocupado en AD. Buscando alternativa...")
+                try:
+                    # Extraer el número del hostname (últimos 2 dígitos antes del tipo)
+                    numero_ocupado = int(nuevo_hostname[-4:-2])
+                    numeros_ocupados_ad.add(numero_ocupado)
+                except ValueError:
+                    pass
+
+                # Pequeña espera antes de reintentar
+                time.sleep(2)
+            else:
+                logger.error("FALLO CRÍTICO: No se pudo encontrar un hostname disponible después de 3 intentos.")
+                return EXIT_NO_AVAILABLE_NUMBER
             
             # 3. RESERVAR HOSTNAME EN JSON ANTES DE CAMBIO
             hostnames_data = reservar_hostname_en_json(hostnames_data, nuevo_hostname, tipo, logger)
             guardar_json_hostnames(hostnames_data, logger)
             logger.info(f"Hostname {nuevo_hostname} reservado en JSON")
             
+            cambio_de_hostname_bool = cambiar_hostname(nuevo_hostname, usuario, password, logger)
+
             # 4. Intentar cambio de hostname
-            if cambiar_hostname(nuevo_hostname, usuario, password, logger):
+            if cambio_de_hostname_bool:
                 # Paso 11: Actualizar JSON (remover antiguo)
                 hostnames_data = actualizar_json_remover_antiguo(hostnames_data, hostname_actual, logger)
                 guardar_json_hostnames(hostnames_data, logger)
                 logger.info("Proceso completado exitosamente! Hostname cambiado y JSON actualizado.")
                 success_process = True
             else:
-                # Liberar reserva si falla el cambio
-                hostnames_data = liberar_hostname_en_json(hostnames_data, nuevo_hostname, logger)
-                guardar_json_hostnames(hostnames_data, logger)
-                logger.warning(f"Reserva liberada para {nuevo_hostname}")
-                
-                tiempo_base_espera = 5 * intentos
-                tiempo_aleatorio = random.uniform(0, 10)
-                tiempo_espera = tiempo_base_espera + tiempo_aleatorio
-                logger.error(f"Falló el cambio de hostname. Reintentando en {tiempo_espera:.2f} segundos...")
-                time.sleep(tiempo_espera)
-                intentos += 1
+                current_hostname = obtener_hostname_nuevo_actual()
+
+                if current_hostname == nuevo_hostname:
+                    logger.warning(f"Hostname cambiado exitosamente a {nuevo_hostname}, pero no se verificó en AD.")
+                    logger.info(f"Actualizando AD")
+                    logger.info(f"Verificar despues del reinicio si el nuevo hostname {nuevo_hostname} se encuentra en AD y actualizado en el equipo.")
+                    hostnames_data = actualizar_json_remover_antiguo(hostnames_data, hostname_actual, logger)
+                    guardar_json_hostnames(hostnames_data, logger)
+                    logger.info("Proceso completado exitosamente! Hostname cambiado y JSON actualizado.")
+                    
+                    success_process = True
+                else:
+                    # Liberar reserva si falla el cambio
+                    hostnames_data = liberar_hostname_en_json(hostnames_data, nuevo_hostname, logger)
+                    guardar_json_hostnames(hostnames_data, logger)
+                    logger.warning(f"Reserva liberada para {nuevo_hostname}")
+                    
+                    tiempo_base_espera = 5 * intentos
+                    tiempo_aleatorio = random.uniform(5, 30)  # Espera aleatoria entre 5 y 30 segundos
+                    tiempo_espera = tiempo_base_espera + tiempo_aleatorio
+                    logger.error(f"Falló el cambio de hostname. Reintentando en {tiempo_espera:.2f} segundos...")
+                    time.sleep(tiempo_espera)
+                    intentos += 2
                 
         except Exception as e:
             logger.error(f"ERROR NO CONTROLADO: {str(e)}")
